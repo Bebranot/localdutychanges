@@ -411,9 +411,8 @@ namespace Robust.Client.GameStates
                     }
                     catch (MissingMetadataException e)
                     {
-                        // Something has gone wrong. Probably a missing meta-data component. Perhaps a full server state will fix it.
+                        _sawmill.Warning($"Missing metadata for entity {e.NetEntity}. Requesting full state.");
                         RequestFullState(e.NetEntity);
-                        throw;
                     }
 #endif
                 }

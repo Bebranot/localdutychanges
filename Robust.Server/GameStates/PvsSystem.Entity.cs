@@ -111,6 +111,7 @@ internal sealed partial class PvsSystem
             return;
 
         ref var ptr = ref _metadataMemory.GetRef(meta.PvsData.Index);
+        ptr.LastModifiedTick = meta.LastModifiedTick;
         ptr.VisMask = meta.VisibilityMask;
         ptr.LifeStage = meta.EntityLifeStage;
     }
