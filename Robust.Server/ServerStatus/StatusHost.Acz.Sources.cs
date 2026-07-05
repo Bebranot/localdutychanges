@@ -84,7 +84,7 @@ internal sealed partial class StatusHost
             blobCompress);
     }
 
-    private async Task<(byte[] manifestData, AczManifestEntry[] entries, byte[] blobData)?> CalcManifestData(
+    private async Task<(byte[] manifestData, AczManifestEntry[] entries, ReadOnlySequence<byte> blobData)?> CalcManifestData(
         bool blobCompress,
         int blobCompressLevel,
         int blobCompressSaveThresh)
@@ -100,7 +100,7 @@ internal sealed partial class StatusHost
 
         await writerPass.FinishedTask;
 
-        return (writerPass.ManifestContent!, writerPass.ManifestEntries!, writerPass.BlobData!);
+        return (writerPass.ManifestContent!, writerPass.ManifestEntries!, writerPass.BlobData);
     }
 
     private async Task<bool> SourceAczDictionaryViaFile(AssetPass pass, IPackageLogger logger)
@@ -195,7 +195,9 @@ internal sealed partial class StatusHost
 
         public byte[]? ManifestContent;
         public AczManifestEntry[]? ManifestEntries;
-        public byte[]? BlobData;
+        // _Duty: блоб хранится как ReadOnlySequence (сегменты), а не единый byte[] —
+        // иначе ACZ > 2 ГБ падает с OverflowException на new byte[len].
+        public ReadOnlySequence<byte> BlobData;
 
         public AssetPassAczWriter(
             bool blobCompress,
@@ -261,7 +263,7 @@ internal sealed partial class StatusHost
 
             lock (_lock)
             {
-                var streamPos = (int)_stream.Position;
+                var streamPos = _stream.Position;
                 _stream.Write(toWrite);
                 var info = new AczManifestEntry(
                     data.Length,
@@ -302,7 +304,7 @@ internal sealed partial class StatusHost
 
             ManifestContent = manifestStream.ToArray();
             ManifestEntries = manifestEntries;
-            BlobData = _stream.AsSequence.ToArray();
+            BlobData = _stream.AsSequence;
         }
 
         public void Dispose()

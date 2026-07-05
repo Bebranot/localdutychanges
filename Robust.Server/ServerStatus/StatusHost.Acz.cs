@@ -296,7 +296,11 @@ namespace Robust.Server.ServerStatus
 
                     await outStream.WriteAsync(fileHeader);
 
-                    await outStream.WriteAsync(aczInfo.ManifestBlobData.AsMemory(dataOffset, writeLength));
+                    // _Duty: раздаём срез из ReadOnlySequence по сегментам — поддержка ACZ > 2 ГБ.
+                    foreach (var segment in aczInfo.ManifestBlobData.Slice(dataOffset, writeLength))
+                    {
+                        await outStream.WriteAsync(segment);
+                    }
 
                     offset += 4;
                 }
@@ -388,7 +392,7 @@ namespace Robust.Server.ServerStatus
             byte[] ManifestData,
             bool ManifestCompressed,
             string ManifestHash,
-            byte[] ManifestBlobData,
+            ReadOnlySequence<byte> ManifestBlobData,
             AczManifestEntry[] ManifestEntries,
             bool PreCompressed);
 
@@ -398,6 +402,6 @@ namespace Robust.Server.ServerStatus
         /// Length in <see cref="AczManifestInfo.ManifestBlobData"/> for this blob's (possibly compressed) data.
         /// If this is zero, it means the file is not stored uncompressed and you should use <see cref="BlobLength"/>.
         /// </param>
-        internal record struct AczManifestEntry(int BlobLength, int DataOffset, int DataLength);
+        internal record struct AczManifestEntry(int BlobLength, long DataOffset, int DataLength);
     }
 }
