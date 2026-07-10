@@ -23,7 +23,7 @@
   <PropertyGroup Condition="'$(FullRelease)' != 'True'">
     <DefineConstants>$(DefineConstants);DEVELOPMENT</DefineConstants>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'Tools'">
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'Tools' Or '$(Configuration)' == 'Debug' Or '$(Configuration)' == 'DebugOpt'">
     <DefineConstants>$(DefineConstants);EXCEPTION_TOLERANCE</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition="'$(EnableClientScripting)' == 'True'">
