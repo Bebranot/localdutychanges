@@ -254,7 +254,13 @@ namespace Robust.Client.UserInterface.Controls
             // control modulation is applied automatically to the screen handle, but here we need to use the world handle
             var world = renderHandle.DrawingHandleWorld;
             var oldModulate = world.Modulate;
-            world.Modulate *= Modulate * ActualModulateSelf;
+            // _Duty: use the accumulated screen-handle modulate instead of only our own. When RenderControl
+            // calls Draw(), DrawingHandleScreen.Modulate already equals (all ancestors' Modulate) * (our own
+            // Modulate) * ActualModulateSelf, so this preserves the previous result when every parent is white
+            // (the common case) but ALSO lets a faded/modulated parent dim the drawn entity — matching how
+            // every other (non-sprite) control cascades opacity. Needed so sprite-based HUD (alert icons,
+            // item slots) fades with the aim-fade parent instead of staying fully opaque.
+            world.Modulate *= renderHandle.DrawingHandleScreen.Modulate;
 
             renderHandle.DrawEntity(uid, position, scale, _worldRotation, _eyeRotation, OverrideDirection, sprite, xform, _transform);
             world.Modulate = oldModulate;
