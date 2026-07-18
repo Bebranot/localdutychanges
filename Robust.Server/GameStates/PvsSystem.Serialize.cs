@@ -59,18 +59,37 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
-        ComputeSessionState(data);
-        InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
-        DebugTools.AssertEqual(data.StateStream, null);
-
-        // PVS benchmarks use dummy sessions.
-        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-        if (data.Session.Channel is not DummyChannel)
+        // _Duty: ClearState MUST run even if ComputeSessionState/serialization throws. Otherwise the session's
+        // per-tick buffers (States/State/PlayerStates/Chunks) stay dirty and every subsequent tick fails on
+        // UpdateSession's opening asserts -> a self-sustaining cascade (debug: assert spam + crash; release:
+        // States accumulates and stale entity states linger, e.g. an aghost-picked item never un-sticks on
+        // other clients). A finally makes a single bad tick self-heal instead of poisoning all following ticks.
+        try
         {
-            data.StateStream = RobustMemoryManager.GetMemoryStream();
-            _serializer.SerializeDirect(data.StateStream, data.State);
-        }
+            ComputeSessionState(data);
+            InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
+            DebugTools.AssertEqual(data.StateStream, null);
 
-        data.ClearState();
+            // PVS benchmarks use dummy sessions.
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+            if (data.Session.Channel is not DummyChannel)
+            {
+                data.StateStream = RobustMemoryManager.GetMemoryStream();
+                _serializer.SerializeDirect(data.StateStream, data.State);
+            }
+        }
+        finally
+        {
+            // ClearState resets States/State/PlayerStates/Chunks, but NOT the pooled ToSend list (normally nulled
+            // inside GetEntityStates once it is handed off to PreviouslySent). If GetEntityStates threw before that
+            // handoff, ToSend is still non-null here -> release it back to the pool and null it, otherwise next
+            // tick's UpdateSession asserts (ToSend == null) and the whole session cascades forever.
+            if (data.ToSend != null)
+            {
+                _entDataListPool.Return(data.ToSend);
+                data.ToSend = null;
+            }
+            data.ClearState();
+        }
     }
 }

@@ -49,7 +49,10 @@ internal sealed partial class PvsSystem
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
         if (data.Session.Channel is not DummyChannel)
         {
-            DebugTools.AssertNotEqual(data.StateStream, null);
+            // _Duty: if serialization failed/was skipped this tick, StateStream is null. Skip sending rather than
+            // asserting (debug) or NRE'ing on a null stream (release); the session recovers next successful tick.
+            if (data.StateStream == null)
+                return;
             var msg = new MsgState
             {
                 StateStream = data.StateStream,

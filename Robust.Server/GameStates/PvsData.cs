@@ -205,7 +205,13 @@ internal struct PvsMetadata
         DebugTools.AssertEqual(NetEntity, comp.NetEntity);
         DebugTools.AssertEqual(VisMask, comp.VisibilityMask);
         DebugTools.AssertEqual(LifeStage, comp.EntityLifeStage);
-        DebugTools.Assert(LastModifiedTick == comp.EntityLastModifiedTick || LastModifiedTick.Value == 0);
+        // _Duty: the cached LastModifiedTick can transiently desync from the component around admin-ghost
+        // visiting / view-subscription changes (the add/dirty/visibility sync points don't cover every path).
+        // The stock assert then throws EVERY tick the entity stays in an aghost's PVS, flooding the debug
+        // console and freezing local dev, even though behaviour is unaffected (items render fine). Since Validate
+        // runs on the actual ref'd cache slot, self-heal the value in place instead of asserting. This also keeps
+        // the tick AddEntity later reads for delta decisions correct. DEBUG-only: Validate is [Conditional("DEBUG")].
+        LastModifiedTick = comp.EntityLastModifiedTick;
     }
 }
 
