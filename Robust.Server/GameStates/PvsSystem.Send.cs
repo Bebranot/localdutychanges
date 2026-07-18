@@ -42,7 +42,11 @@ internal sealed partial class PvsSystem
             if (!data.Session.Channel.IsConnected)
                 return;
 
-            DebugTools.AssertNotEqual(stateStream, null);
+            // _Duty: if serialization failed/was skipped this tick, the stream is null. Skip sending rather than
+            // asserting (debug) or NRE'ing (release); the session recovers on the next successful tick.
+            if (stateStream == null)
+                return;
+
             var msg = new MsgState
             {
                 StateStream = stateStream,

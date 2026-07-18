@@ -59,18 +59,45 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
-        var state = ComputeSessionState(data);
-        InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
-        DebugTools.AssertEqual(data.StateStream, null);
+        // _Duty: ClearSessionState MUST run even if ComputeSessionState/serialization throws. Otherwise the session's
+        // per-tick buffers stay dirty and every subsequent tick fails on UpdateSession's opening asserts -> a
+        // self-sustaining cascade (debug: assert spam + crash; release: stale entity states linger).
+        var serialized = false;
 
-        // PVS benchmarks use dummy sessions.
-        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-        if (data.Session.Channel is not DummyChannel)
+        try
         {
-            data.StateStream = RobustMemoryManager.GetMemoryStream();
-            _serializer.SerializeDirect(data.StateStream, state);
-        }
+            var state = ComputeSessionState(data);
+            InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
+            DebugTools.AssertEqual(data.StateStream, null);
 
-        ClearSessionState(data);
+            // PVS benchmarks use dummy sessions.
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+            if (data.Session.Channel is not DummyChannel)
+            {
+                data.StateStream = RobustMemoryManager.GetMemoryStream();
+                _serializer.SerializeDirect(data.StateStream, state);
+            }
+
+            serialized = true;
+        }
+        finally
+        {
+            // A throw inside SerializeDirect leaves StateStream non-null and half written; SendSessionState only
+            // skips a null stream, so drop the partial one (a skipped tick is recoverable, a truncated state is not).
+            if (!serialized && data.StateStream != null)
+            {
+                data.StateStream.Dispose();
+                data.StateStream = null;
+            }
+
+            // ToSend is normally nulled once handed off to PreviouslySent; if we threw before that, release it.
+            if (data.ToSend != null)
+            {
+                _entDataListPool.Return(data.ToSend);
+                data.ToSend = null;
+            }
+
+            ClearSessionState(data);
+        }
     }
 }
