@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections;
@@ -8,6 +8,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
+using System.Runtime;
 using Robust.Shared;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
@@ -65,6 +66,7 @@ namespace Robust.Server.ServerStatus
 
             _aczSawmill.Info(reason);
 
+            _aczPrepared.BlobStore.Dispose();
             _aczPrepared = null;
             _aczPrepareAttempted = false;
         }
@@ -296,11 +298,9 @@ namespace Robust.Server.ServerStatus
 
                     await outStream.WriteAsync(fileHeader);
 
-                    // _Duty: раздаём срез из ReadOnlySequence по сегментам — поддержка ACZ > 2 ГБ.
-                    foreach (var segment in aczInfo.ManifestBlobData.Slice(dataOffset, writeLength))
-                    {
-                        await outStream.WriteAsync(segment);
-                    }
+                    // _Duty: раздаём срез через AczBlobStore — блоб лежит на диске, а не в куче,
+                    // и по длине не ограничен 2 ГБ.
+                    await aczInfo.BlobStore.WriteSliceAsync(outStream, dataOffset, writeLength);
 
                     offset += 4;
                 }
@@ -352,6 +352,14 @@ namespace Robust.Server.ServerStatus
                     }
 
                     _aczPrepared = maybeData;
+
+                    // Building the manifest churns through hundreds of megabytes of pooled buffers
+                    // and compression contexts, and leaves the heap inflated for the rest of the
+                    // process. This runs at most once per process and never on a hot path, so hand
+                    // that memory straight back instead of sitting on it all round.
+                    GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+
                     return maybeData;
                 }
                 catch (Exception e)
@@ -388,18 +396,22 @@ namespace Robust.Server.ServerStatus
         /// <param name="ManifestData">Data for the content manifest</param>
         /// <param name="ManifestHash">Hex BLAKE2B 256-bit hash of <see cref="ManifestData"/>.</param>
         /// <param name="ManifestEntries">Manifest -> zip entry map.</param>
+        /// <param name="BlobStore">
+        /// Where the actual file contents live. Owned by <see cref="StatusHost"/>: disposed when the
+        /// ACZ is invalidated.
+        /// </param>
         internal sealed record AczManifestInfo(
             byte[] ManifestData,
             bool ManifestCompressed,
             string ManifestHash,
-            ReadOnlySequence<byte> ManifestBlobData,
+            AczBlobStore BlobStore,
             AczManifestEntry[] ManifestEntries,
             bool PreCompressed);
 
         /// <param name="BlobLength">Length of the uncompressed blob.</param>
-        /// <param name="DataOffset">Offset into <see cref="AczManifestInfo.ManifestBlobData"/> that this blob's (possibly compressed) data starts at.</param>
+        /// <param name="DataOffset">Offset into <see cref="AczManifestInfo.BlobStore"/> that this blob's (possibly compressed) data starts at.</param>
         /// <param name="DataLength">
-        /// Length in <see cref="AczManifestInfo.ManifestBlobData"/> for this blob's (possibly compressed) data.
+        /// Length in <see cref="AczManifestInfo.BlobStore"/> for this blob's (possibly compressed) data.
         /// If this is zero, it means the file is not stored uncompressed and you should use <see cref="BlobLength"/>.
         /// </param>
         internal record struct AczManifestEntry(int BlobLength, long DataOffset, int DataLength);
