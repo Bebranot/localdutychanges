@@ -13,6 +13,9 @@ namespace Robust.Client.Audio;
 /// </summary>
 internal sealed class HeadlessAudioManager : IAudioInternal
 {
+    /// <summary>Stand-in rate for <see cref="DecodeAudioOggVorbis"/>, which never actually decodes.</summary>
+    private const int DefaultSampleRate = 44100;
+
     private int _audioBuffer;
 
     /// <inheritdoc />
@@ -97,6 +100,14 @@ internal sealed class HeadlessAudioManager : IAudioInternal
     {
         var metadata = AudioLoaderOgg.LoadAudioMetadata(stream);
         return AudioStreamFromMetadata(metadata, name);
+    }
+
+    public AudioPcmData DecodeAudioOggVorbis(Stream stream)
+    {
+        // Headless never plays anything, so skip the expensive decode and hand back an empty buffer.
+        // The resulting AudioStream will report a length of zero; nothing headless reads that.
+        var metadata = AudioLoaderOgg.LoadAudioMetadata(stream);
+        return new AudioPcmData(ReadOnlyMemory<short>.Empty, metadata.ChannelCount, DefaultSampleRate);
     }
 
     public AudioStream LoadAudioWav(Stream stream, string? name = null)
