@@ -9,12 +9,8 @@ using Robust.Shared.Utility;
 
 namespace Robust.Client.ResourceManagement;
 
-public sealed class AudioResource : BaseResource, IBaseResource
+public sealed class AudioResource : BaseResource
 {
-    // Audio buffers are the single largest thing content can put in the cache (a five minute stereo
-    // track is ~60 MB of PCM in the AL driver), so unlike most resources these have to be evictable.
-    static bool IBaseResource.CanBeRemoved => true;
-
     // from: https://en.wikipedia.org/wiki/List_of_file_signatures
     private static readonly byte[] OggSignature = "OggS"u8.ToArray();
     private static readonly byte[] RiffSignature = "RIFF"u8.ToArray();
@@ -57,14 +53,6 @@ public sealed class AudioResource : BaseResource, IBaseResource
         {
             throw new NotSupportedException("Unable to load audio files outside of ogg Vorbis or PCM wav");
         }
-    }
-
-    public override void Dispose()
-    {
-        // AudioStream is default! until Load runs, so a resource that failed to load can end up here
-        // with nothing to free.
-        if (AudioStream is { } stream)
-            stream.Dispose();
     }
 
     public override void Reload(IDependencyCollection dependencies, ResPath path, CancellationToken ct = default)

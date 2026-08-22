@@ -139,14 +139,6 @@ internal partial class AudioManager
     }
 
     /// <inheritdoc/>
-    public AudioPcmData DecodeAudioOggVorbis(Stream stream)
-    {
-        // Deliberately touches no AL state, so this can run off the main thread.
-        var vorbis = AudioLoaderOgg.LoadAudioData(stream);
-        return new AudioPcmData(vorbis.Data, (int) vorbis.Channels, (int) vorbis.SampleRate);
-    }
-
-    /// <inheritdoc/>
     public AudioStream LoadAudioWav(Stream stream, string? name = null)
     {
         var wav = AudioLoaderWav.LoadAudioData(stream);
