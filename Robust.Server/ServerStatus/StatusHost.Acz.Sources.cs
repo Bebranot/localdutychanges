@@ -252,11 +252,16 @@ internal sealed partial class StatusHost
             {
                 try
                 {
+                    // DeleteOnClose rather than a manual File.Delete: the blob is multiple gigabytes
+                    // and nothing outside this process ever reads it, so let the OS drop it the
+                    // moment the last handle closes - including when the server is killed hard,
+                    // which used to leave the whole blob sitting in the data dir until the next run.
                     _blobHandle = File.OpenHandle(
                         blobPath,
                         FileMode.Create,
                         FileAccess.ReadWrite,
-                        FileShare.None);
+                        FileShare.None,
+                        FileOptions.DeleteOnClose);
                     _blobPath = blobPath;
                 }
                 catch (Exception e)
@@ -407,10 +412,10 @@ internal sealed partial class StatusHost
 
             if (_blobHandle != null)
             {
-                _blobStore = new AczFileBlobStore(_blobHandle, _blobPath!, _blobPosition);
+                _blobStore = new AczFileBlobStore(_blobHandle, _blobPosition);
                 _sawmill.Info(
-                    "ACZ blob written to disk: {BlobSize} bytes over {FileCount} files ({DedupeHits} deduplicated)",
-                    _blobPosition, _infos.Count, _dedupeHits);
+                    "ACZ blob written to '{BlobPath}': {BlobSize} bytes over {FileCount} files ({DedupeHits} deduplicated)",
+                    _blobPath, _blobPosition, _infos.Count, _dedupeHits);
             }
             else
             {
@@ -426,10 +431,22 @@ internal sealed partial class StatusHost
             // _compressStreamPool is actually a DisposableObjectPool, which is an internal type.
             (_compressStreamPool as IDisposable)?.Dispose();
 
-            // If nobody took the store the whole ACZ attempt failed, so don't leave the file handle
-            // (and the file) behind.
-            if (!_blobStoreTaken)
-                _blobStore?.Dispose();
+            if (_blobStoreTaken)
+                return;
+
+            // Nobody took the store, so the ACZ attempt failed and the file must not outlive this
+            // pass. _blobStore only exists once AcceptFinished ran; when the pipeline found no ACZ
+            // source at all (CalcManifestData's `if (!result) return null`) or threw, it is still
+            // null and the raw handle is the only thing holding the file open. Leaking it mattered:
+            // the file is opened FileShare.None, so the next attempt in the same process could not
+            // reopen it and silently fell back to the multi-gigabyte in-heap blob.
+            if (_blobStore != null)
+            {
+                _blobStore.Dispose();
+                return;
+            }
+
+            _blobHandle?.Dispose();
         }
     }
 

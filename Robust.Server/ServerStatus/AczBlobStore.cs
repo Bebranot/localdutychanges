@@ -81,13 +81,23 @@ internal sealed class AczFileBlobStore : AczBlobStore
     private const int CopyBufferSize = 128 * 1024;
 
     private readonly SafeFileHandle _handle;
-    private readonly string _path;
     private readonly long _length;
 
-    public AczFileBlobStore(SafeFileHandle handle, string path, long length)
+    /// <summary>
+    /// Guards <see cref="_readers"/> and <see cref="_disposed"/>. The handle must outlive every
+    /// download currently reading through it: <see cref="StatusHost.InvalidateAcz"/> can fire at any
+    /// time (a CVar change is enough), and closing the handle under an in-flight launcher would fail
+    /// that download with an <see cref="ObjectDisposedException"/>. Upstream did not have this
+    /// hazard because the blob was a <c>byte[]</c> that the request kept alive by reference.
+    /// </summary>
+    private readonly object _lock = new();
+
+    private int _readers;
+    private bool _disposed;
+
+    public AczFileBlobStore(SafeFileHandle handle, long length)
     {
         _handle = handle;
-        _path = path;
         _length = length;
     }
 
@@ -99,6 +109,9 @@ internal sealed class AczFileBlobStore : AczBlobStore
         int length,
         CancellationToken cancel = default)
     {
+        if (!TryAcquire())
+            throw new ObjectDisposedException(nameof(AczFileBlobStore), "The ACZ blob was invalidated.");
+
         var buffer = ArrayPool<byte>.Shared.Rent(Math.Min(length, CopyBufferSize));
         try
         {
@@ -122,23 +135,46 @@ internal sealed class AczFileBlobStore : AczBlobStore
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+            Release();
+        }
+    }
+
+    private bool TryAcquire()
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+                return false;
+
+            _readers += 1;
+            return true;
+        }
+    }
+
+    private void Release()
+    {
+        lock (_lock)
+        {
+            _readers -= 1;
+
+            // Whoever leaves last after a Dispose does the actual close.
+            if (_disposed && _readers == 0)
+                _handle.Dispose();
         }
     }
 
     public override void Dispose()
     {
-        _handle.Dispose();
+        lock (_lock)
+        {
+            if (_disposed)
+                return;
 
-        try
-        {
-            File.Delete(_path);
-        }
-        catch (IOException)
-        {
-            // Best-effort cleanup; a stale blob file is harmless, the next run overwrites it.
-        }
-        catch (UnauthorizedAccessException)
-        {
+            _disposed = true;
+
+            // The file itself is FileOptions.DeleteOnClose, so closing the handle removes it.
+            if (_readers == 0)
+                _handle.Dispose();
         }
     }
 }
