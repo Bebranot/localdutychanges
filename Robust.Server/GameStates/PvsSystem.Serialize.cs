@@ -64,6 +64,8 @@ internal sealed partial class PvsSystem
         // UpdateSession's opening asserts -> a self-sustaining cascade (debug: assert spam + crash; release:
         // States accumulates and stale entity states linger, e.g. an aghost-picked item never un-sticks on
         // other clients). A finally makes a single bad tick self-heal instead of poisoning all following ticks.
+        var serialized = false;
+
         try
         {
             ComputeSessionState(data);
@@ -77,9 +79,22 @@ internal sealed partial class PvsSystem
                 data.StateStream = RobustMemoryManager.GetMemoryStream();
                 _serializer.SerializeDirect(data.StateStream, data.State);
             }
+
+            serialized = true;
         }
         finally
         {
+            // A throw inside SerializeDirect leaves StateStream non-null and HALF WRITTEN, and
+            // ClearState does not touch it. SendSessionState only skips a null stream, so without
+            // this the session would be shipped a truncated game state - which under
+            // EXCEPTION_TOLERANCE (release servers swallow the exception) is a silent desync rather
+            // than a visible crash. Drop the partial stream; skipping one tick is recoverable.
+            if (!serialized && data.StateStream != null)
+            {
+                data.StateStream.Dispose();
+                data.StateStream = null;
+            }
+
             // ClearState resets States/State/PlayerStates/Chunks, but NOT the pooled ToSend list (normally nulled
             // inside GetEntityStates once it is handed off to PreviouslySent). If GetEntityStates threw before that
             // handoff, ToSend is still non-null here -> release it back to the pool and null it, otherwise next
