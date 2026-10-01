@@ -120,9 +120,18 @@ namespace Robust.Client.Graphics.Clyde
 
         private float _maxLightRadius;
 
+        // _Duty: раньше эти CVar-ы читались (а цвет FOV ещё и парсился из строки) каждый кадр на каждый вьюпорт.
+        private bool _lightBlur;
+        private float _lightBlurFactor;
+        private Color _fovOccludeColor = Color.Black;
+
         private unsafe void InitLighting()
         {
             _cfg.OnValueChanged(CVars.MaxLightRadius, val => { _maxLightRadius = val;}, true);
+            _cfg.OnValueChanged(CVars.LightBlur, val => _lightBlur = val, true);
+            _cfg.OnValueChanged(CVars.LightBlurFactor, val => _lightBlurFactor = val, true);
+            _cfg.OnValueChanged(CVars.RenderFOVColor,
+                val => _fovOccludeColor = Color.TryParse(val, out var color) ? color : Color.Black, true);
 
             // Other...
             LoadLightingShaders();
@@ -478,6 +487,10 @@ namespace Robust.Client.Graphics.Clyde
             var lastCurveFactor = float.NaN;
             Texture? lastMask = null;
 
+            var hasLightCenter = lightShader.TryGetUniform("lightCenter", out var lightCenterSlot);
+            var hasLightIndex = lightShader.TryGetUniform("lightIndex", out var lightIndexSlot);
+            var shadowHeight = (float) ShadowTexture.Height;
+
             using (_prof.Group("Draw Lights"))
             {
                 for (var i = 0; i < count; i++)
@@ -539,9 +552,18 @@ namespace Robust.Client.Graphics.Clyde
                         lightShader.SetUniformMaybe("lightCurveFactor", lastCurveFactor);
                     }
 
-                    lightShader.SetUniformMaybe("lightCenter", lightPos);
-                    lightShader.SetUniformMaybe("lightIndex",
-                        lightData.ShadowMapIndex >= 0 ? (lightData.ShadowMapIndex + 0.5f) / ShadowTexture.Height : -1);
+                    // _Duty: эти два меняются у каждого источника — слоты взяты до цикла, без поиска по имени.
+                    if (hasLightCenter)
+                    {
+                        GL.Uniform2(lightCenterSlot, lightPos.X, lightPos.Y);
+                        CheckGlError();
+                    }
+
+                    if (hasLightIndex)
+                    {
+                        GL.Uniform1(lightIndexSlot, lightData.ShadowMapIndex >= 0 ? (lightData.ShadowMapIndex + 0.5f) / shadowHeight : -1f);
+                        CheckGlError();
+                    }
 
                     var offset = new Vector2(component.Radius, component.Radius);
 
@@ -567,7 +589,7 @@ namespace Robust.Client.Graphics.Clyde
 
             CheckGlError();
 
-            if (_cfg.GetCVar(CVars.LightBlur))
+            if (_lightBlur)
                 BlurRenderTarget(viewport, viewport.LightRenderTarget, viewport.LightBlurTarget, eye, 14f);
 
             using (_prof.Group("BlurOntoWalls"))
@@ -857,7 +879,7 @@ namespace Robust.Client.Graphics.Clyde
             SetTexture(TextureUnit.Texture0, rTexture.Texture);
 
             // Have to scale the blurring radius based on viewport size and camera zoom.
-            var facBase = _cfg.GetCVar(CVars.LightBlurFactor);
+            var facBase = _lightBlurFactor;
             var cameraSize = eye.Zoom.Y * viewport.Size.Y * (1 / viewport.RenderScale.Y) / EyeManager.PixelsPerMeter;
             // 7e-3f is just a magic factor that makes it look ok.
             var factor = facBase * (multiplier / cameraSize);
@@ -999,10 +1021,7 @@ namespace Robust.Client.Graphics.Clyde
 
             fovShader.SetUniformTextureMaybe(UniIMainTexture, TextureUnit.Texture0);
 
-            if (!Color.TryParse(_cfg.GetCVar(CVars.RenderFOVColor), out var color))
-                color = Color.Black;
-
-            fovShader.SetUniformMaybe("occludeColor", color);
+            fovShader.SetUniformMaybe("occludeColor", _fovOccludeColor);
             FovSetTransformAndBlit(viewport, eye.Position.Position, fovShader);
 
             GL.StencilMask(0x00);
