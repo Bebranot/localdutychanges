@@ -606,6 +606,9 @@ namespace Robust.Client.GameStates
             }
         }
 
+        private readonly List<IComponent> _resetToRemove = new();
+        private readonly List<EntityUid> _resetPredictedSpawns = new();
+
         public void ResetPredictedEntities()
         {
             using var _ = _prof.Group("ResetPredictedEntities");
@@ -619,7 +622,9 @@ namespace Robust.Client.GameStates
 
             // Handle predicted entity spawns before applying state-created entities. This
             // keeps predicted chunk entities from colliding with authoritative chunk entities.
-            var predicted = new ValueList<EntityUid>();
+            // _Duty: буферы переиспользуются между вызовами — сброс идёт на каждый применённый стейт.
+            var predicted = _resetPredictedSpawns;
+            predicted.Clear();
             var predictedQuery = _entities.AllEntityQueryEnumerator<PredictedSpawnComponent>();
 
             while (predictedQuery.MoveNext(out var uid, out var _))
@@ -633,11 +638,14 @@ namespace Robust.Client.GameStates
                 _entities.DeleteEntity(ent);
             }
 
+            predicted.Clear();
+
             PredictionNeedsResetting = false;
             var countReset = 0;
             var system = _entitySystemManager.GetEntitySystem<ClientDirtySystem>();
             var metaQuery = _entities.GetEntityQuery<MetaDataComponent>();
-            RemQueue<IComponent> toRemove = new();
+            var toRemove = _resetToRemove;
+            toRemove.Clear();
 
             foreach (var entity in system.DirtyEntities)
             {
