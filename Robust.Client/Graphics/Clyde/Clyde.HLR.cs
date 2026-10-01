@@ -308,7 +308,6 @@ namespace Robust.Client.Graphics.Clyde
             var screenSize = viewport.Size;
             var overlayIndex = 0;
 
-            RenderTexture? entityPostRenderTarget = null;
             bool flushed = false;
             for (var i = 0; i < _drawingSpriteList.Count; i++)
             {
@@ -334,6 +333,10 @@ namespace Robust.Client.Graphics.Clyde
                 }
 
                 Vector2i roundedPos = default;
+                // _Duty: раньше признаком «этот спрайт рисуется в RT» был сам RT != null. С таргетом,
+                // живущим между спрайтами и кадрами, это уже не так: спрайт, для которого RT не
+                // подготовили (нулевой размер, нет копии экрана), иначе вывел бы чужое содержимое RT.
+                var drawnIntoPostTarget = false;
                 if (entry.Sprite.PostShader != null)
                 {
                     // get the size of the sprite on screen, scaled slightly to allow for shaders that increase the final sprite size.
@@ -373,16 +376,10 @@ namespace Robust.Client.Graphics.Clyde
                         //
                         // TODO PERFORMANCE better renderTarget re-use / caching.
 
-                        if (entityPostRenderTarget == null
-                            || entityPostRenderTarget.Size.X < screenSpriteSize.X
-                            || entityPostRenderTarget.Size.Y < screenSpriteSize.Y)
-                        {
-                            entityPostRenderTarget = CreateRenderTarget(screenSpriteSize,
-                                new RenderTargetFormatParameters(RenderTargetColorFormat.Rgba8Srgb, true),
-                                name: nameof(entityPostRenderTarget));
-                        }
+                        var postTarget = EnsureEntityPostRenderTarget(screenSpriteSize);
+                        drawnIntoPostTarget = true;
 
-                        _renderHandle.UseRenderTarget(entityPostRenderTarget);
+                        _renderHandle.UseRenderTarget(postTarget);
                         _renderHandle.Clear(default, 0, ClearBufferMask.ColorBufferBit | ClearBufferMask.StencilBufferBit);
 
                         // Calculate viewport so that the entity thinks it's drawing to the same position,
@@ -390,7 +387,7 @@ namespace Robust.Client.Graphics.Clyde
                         // but it's ACTUALLY drawing into the center of the render target.
                         roundedPos = (Vector2i) entry.SpriteScreenBB.Center;
                         var flippedPos = new Vector2i(roundedPos.X, screenSize.Y - roundedPos.Y);
-                        flippedPos -= entityPostRenderTarget.Size / 2;
+                        flippedPos -= postTarget.Size / 2;
                         _renderHandle.Viewport(Box2i.FromDimensions(-flippedPos, screenSize));
 
                         if (entry.Sprite.RaiseShaderEvent)
@@ -401,7 +398,7 @@ namespace Robust.Client.Graphics.Clyde
 
                 spriteSystem.RenderSprite(new(entry.Uid, entry.Sprite), _renderHandle.DrawingHandleWorld, eye.Rotation, entry.WorldRot, entry.WorldPos);
 
-                if (entry.Sprite.PostShader != null && entityPostRenderTarget != null)
+                if (drawnIntoPostTarget && _entityPostRenderTarget is { } entityPostRenderTarget)
                 {
                     var oldProj = _currentMatrixProj;
                     var oldView = _currentMatrixView;
@@ -440,11 +437,75 @@ namespace Robust.Client.Graphics.Clyde
             }
 
             ArrayPool<int>.Shared.Return(indexList);
-            entityPostRenderTarget?.DisposeDeferred();
 
             _debugStats.Entities += _drawingSpriteList.Count;
             _drawingSpriteList.Clear();
             FlushRenderQueue();
+        }
+
+        // _Duty: RT для пост-шейдеров спрайтов (подсветка наведения, стелс, призраки, затопление и т.п.).
+        // Раньше он создавался при первом таком спрайте и удалялся в конце каждого кадра — пока на
+        // экране есть хоть одна подсветка, это выделение и освобождение GPU-текстуры (и FBO со
+        // стенсилом) каждый кадр, что на слабых драйверах заметно по фреймтайму. Теперь живёт между
+        // кадрами и только растёт; если долго нужен сильно меньший — пересоздаётся.
+        private RenderTexture? _entityPostRenderTarget;
+        private int _entityPostRenderTargetOversizedFrames;
+        private uint _entityPostRenderTargetLastFrame;
+        private Vector2i _entityPostRenderTargetFrameMax;
+
+        // Сколько кадров подряд таргет может быть «в 4+ раза больше нужного», прежде чем ужмём его.
+        private const int EntityPostRenderTargetShrinkFrames = 600;
+
+        private RenderTexture EnsureEntityPostRenderTarget(Vector2i size)
+        {
+            TrackEntityPostRenderTargetUsage(size);
+
+            var current = _entityPostRenderTarget;
+            if (current != null && current.Size.X >= size.X && current.Size.Y >= size.Y)
+                return current;
+
+            // Растём сразу по обеим осям до максимума — иначе широкий и высокий спрайты по очереди
+            // пересоздавали бы таргет каждый кадр.
+            var newSize = current == null ? size : Vector2i.ComponentMax(current.Size, size);
+
+            // Отложенно: в очереди рендера могут ещё лежать команды, читающие старую текстуру.
+            current?.DisposeDeferred();
+            _entityPostRenderTarget = CreateRenderTarget(newSize,
+                new RenderTargetFormatParameters(RenderTargetColorFormat.Rgba8Srgb, true),
+                name: nameof(_entityPostRenderTarget));
+            _entityPostRenderTargetOversizedFrames = 0;
+
+            return _entityPostRenderTarget;
+        }
+
+        private void TrackEntityPostRenderTargetUsage(Vector2i size)
+        {
+            var frame = _gameTiming.CurFrame;
+            if (frame == _entityPostRenderTargetLastFrame)
+            {
+                _entityPostRenderTargetFrameMax = Vector2i.ComponentMax(_entityPostRenderTargetFrameMax, size);
+                return;
+            }
+
+            // Новый кадр — подводим итог прошлого: хватило бы таргета вчетверо меньше по площади?
+            if (_entityPostRenderTarget is { } rt
+                && _entityPostRenderTargetFrameMax.X * 2 <= rt.Size.X
+                && _entityPostRenderTargetFrameMax.Y * 2 <= rt.Size.Y)
+            {
+                if (++_entityPostRenderTargetOversizedFrames >= EntityPostRenderTargetShrinkFrames)
+                {
+                    rt.DisposeDeferred();
+                    _entityPostRenderTarget = null;
+                    _entityPostRenderTargetOversizedFrames = 0;
+                }
+            }
+            else
+            {
+                _entityPostRenderTargetOversizedFrames = 0;
+            }
+
+            _entityPostRenderTargetLastFrame = frame;
+            _entityPostRenderTargetFrameMax = size;
         }
 
         private void DrawLoadingScreen(IRenderHandle handle)
