@@ -484,6 +484,14 @@ namespace Robust.Shared
             CVarDef.Create("sys.gc_collect_start", true);
 
         /// <summary>
+        /// _Duty: run the client GC in <see cref="System.Runtime.GCLatencyMode.SustainedLowLatency"/> mode,
+        /// so blocking full collections are avoided while playing (background gen2 is still allowed).
+        /// Trades a bit of memory for fewer long frame hitches. Has no effect without concurrent GC.
+        /// </summary>
+        public static readonly CVarDef<bool> SysGCSustainedLowLatency =
+            CVarDef.Create("sys.gc_sustained_low_latency", true, CVar.CLIENTONLY | CVar.ARCHIVE);
+
+        /// <summary>
         /// Use precise sleeping methods in the game loop.
         /// </summary>
         public static readonly CVarDef<bool> SysPreciseSleep =
