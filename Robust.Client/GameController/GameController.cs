@@ -269,6 +269,13 @@ namespace Robust.Client
                 GC.Collect();
             }
 
+            // _Duty: ставим после стартовой сборки, чтобы она отработала полностью. Дальше блокирующие
+            // полные сборки — главный источник редких длинных фризов у клиента — заменяются фоновыми.
+            _configurationManager.OnValueChanged(CVars.SysGCSustainedLowLatency, enabled =>
+                GCSettings.LatencyMode = enabled
+                    ? GCLatencyMode.SustainedLowLatency
+                    : GCLatencyMode.Interactive, invokeImmediately: true);
+
             // Setup main loop
             if (_mainLoop == null)
             {
