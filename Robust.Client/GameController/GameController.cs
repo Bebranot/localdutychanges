@@ -271,10 +271,15 @@ namespace Robust.Client
 
             // _Duty: ставим после стартовой сборки, чтобы она отработала полностью. Дальше блокирующие
             // полные сборки — главный источник редких длинных фризов у клиента — заменяются фоновыми.
-            _configurationManager.OnValueChanged(CVars.SysGCSustainedLowLatency, enabled =>
-                GCSettings.LatencyMode = enabled
-                    ? GCLatencyMode.SustainedLowLatency
-                    : GCLatencyMode.Interactive, invokeImmediately: true);
+            // Только для оконного клиента: режим GC общий на весь процесс, а безголовые клиенты
+            // (интеграционные тесты) живут в одном процессе с сервером и десятком других пар.
+            if (displayMode == DisplayMode.Clyde)
+            {
+                _configurationManager.OnValueChanged(CVars.SysGCSustainedLowLatency, enabled =>
+                    GCSettings.LatencyMode = enabled
+                        ? GCLatencyMode.SustainedLowLatency
+                        : GCLatencyMode.Interactive, invokeImmediately: true);
+            }
 
             // Setup main loop
             if (_mainLoop == null)
